@@ -23,6 +23,7 @@
         {{ item.status }}：{{ item.count }}
       </span>
     </p>
+    <p class="policy-note">复核口径：坡面情况与排水情况都为「正常」才判「已复核」；任一项异常转「发现异常」并写明原因。状态只能 待巡查 → 已巡查 → 发现异常 → 已复核 顺向推进。</p>
 
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
@@ -43,11 +44,24 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+          <td v-for="column in columns" :key="column">
+            <RouterLink
+              v-if="column === '巡查编号'"
+              class="link"
+              :to="`/patrol/${encodeURIComponent(String(row['巡查编号']))}`"
+            >
+              {{ row[column] ?? '—' }}
+            </RouterLink>
+            <template v-else-if="column === '复核说明'">{{ noteFor(row) || '—' }}</template>
+            <template v-else>{{ row[column] ?? '—' }}</template>
+          </td>
+          <td>
+            {{ row.status }}
+            <span v-if="row.blocked" class="tag tag-warn" :title="String(row['复核问题'] ?? '')">待更正</span>
+          </td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in actionsFor(row)"
               :key="action"
               class="link"
               type="button"
@@ -55,6 +69,7 @@
             >
               {{ action }}
             </button>
+            <span v-if="!actionsFor(row).length" class="muted">—</span>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -65,6 +80,7 @@
 
     <footer class="page-foot">
       <span>共 {{ total }} 条群测群防巡查记录</span>
+      <span v-if="noticeMessage" class="notice-text">{{ noticeMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -82,22 +98,57 @@ import {
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('patrol')
-const columns = ["巡查编号", "所属隐患点", "巡查人", "巡查日期", "坡面情况", "排水情况", "巡查结论", "巡查状态"]
-const actions = ["提交巡查", "上报异常", "确认复核"]
-const statuses = ["待巡查", "已巡查", "发现异常", "已复核"]
-const stats = [{"label": "待巡查任务", "value": 0}, {"label": "发现异常次数", "value": 0}, {"label": "本月巡查次数", "value": 0}]
+const columns = ['巡查编号', '所属隐患点', '巡查人', '巡查日期', '坡面情况', '排水情况', '巡查结论', '复核说明']
+const statuses = ['待巡查', '已巡查', '发现异常', '已复核']
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const filterFields = ['巡查编号', '所属隐患点', '巡查人']
+
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+// 统计实时读列表，不再用页面写死的 0
+const stats = computed(() => {
+  const monthPrefix = new Date().toISOString().slice(0, 7)
+  return [
+    { label: '待巡查任务', value: rows.value.filter((row) => String(row.status) === '待巡查').length },
+    { label: '发现异常次数', value: rows.value.filter((row) => String(row.status) === '发现异常').length },
+    {
+      label: '本月巡查次数',
+      value: rows.value.filter(
+        (row) => String(row.status) !== '待巡查' && String(row['巡查日期']).startsWith(monthPrefix),
+      ).length,
+    },
+  ]
+})
+
+// 复核说明只用于展示：异常写明原因，越界值写明挡回原因，与状态机里的判定一致；不落库
+function noteFor(row: EntryRow): string {
+  if (row.blocked) return String(row['复核问题'] ?? '巡查结论越界，待更正')
+  return String(row['异常原因'] ?? '')
+}
+
+// 状态只能顺向推进，动作按当前状态给：不把回退/跳级的入口摆出来
+function actionsFor(row: EntryRow): string[] {
+  switch (String(row.status)) {
+    case '待巡查':
+      return ['提交巡查']
+    case '已巡查':
+      return ['上报异常', '确认复核']
+    case '发现异常':
+      return ['确认复核']
+    default:
+      return []
+  }
+}
 
 function resetFilters() {
   filters.value = {}
@@ -114,16 +165,19 @@ function openCreate() {
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  noticeMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  noticeMessage.value = result.message
   reload()
 }
 
 function reload() {
   errorMessage.value = ''
+  noticeMessage.value = ''
   try {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items

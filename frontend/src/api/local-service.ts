@@ -1,5 +1,10 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import {
+  applyPatrolAction,
+  canonicalPatrolRows,
+  PATROL_KEY,
+} from '@/data/patrol-domain'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -24,8 +29,21 @@ export function filterRows(rows: EntryRow[], filters: Record<string, string>): E
 }
 
 export function listEntries(key: string, filters: Record<string, string> = {}): PageResult {
-  const matched = filterRows(listRows(key), filters)
+  // 巡查按巡查编号去重后再出列表：同一份记录（含重复复核）只显示一条
+  const source = key === PATROL_KEY ? canonicalPatrolRows(listRows(key)) : listRows(key)
+  const matched = filterRows(source, filters)
   return { items: matched, total: matched.length, page: 1, size: matched.length }
+}
+
+/**
+ * 详情读取：支持按记录 id 或巡查编号定位。列表与详情走同一套去重口径，
+ * 导航点进去的页面和列表里那条一定对得上，巡查人等字段也是同一套。
+ */
+export function getPatrolEntry(idOrCode: string | number): EntryRow | undefined {
+  const needle = String(idOrCode)
+  return canonicalPatrolRows(listRows(PATROL_KEY)).find(
+    (row) => String(row.id) === needle || String(row['巡查编号']) === needle,
+  )
 }
 
 export function runAction(key: string, id: number, action: string): ActionResult {
@@ -39,6 +57,23 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (index < 0) {
     return { ok: false, message: `没有找到编号为 ${id} 的${meta.entity}` }
   }
+
+  // 巡查走专用状态机：顺向推进、复核按现行口径判、越界值挡回、
+  // 异常结果同步到受威胁对象台账（待核项幂等补登）
+  if (key === PATROL_KEY) {
+    const result = applyPatrolAction(
+      action as Parameters<typeof applyPatrolAction>[0],
+      rows[index],
+    )
+    if (!result.ok) return result
+    if (result.row) {
+      const next = [...rows]
+      next[index] = result.row
+      saveRows(PATROL_KEY, next)
+    }
+    return { ok: true, message: result.message }
+  }
+
   const current = String(rows[index].status)
   if (current === target) {
     return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
