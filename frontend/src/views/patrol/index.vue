@@ -43,11 +43,13 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">
+            {{ column === '巡查人' ? resolvePatroller(row) : row[column] || '—' }}
+          </td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in availableActions(row)"
               :key="action"
               class="link"
               type="button"
@@ -55,6 +57,7 @@
             >
               {{ action }}
             </button>
+            <button class="link" type="button" @click="openDetail(row)">详情</button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -65,6 +68,7 @@
 
     <footer class="page-foot">
       <span>共 {{ total }} 条群测群防巡查记录</span>
+      <span v-if="noticeMessage" class="notice-text">{{ noticeMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -72,6 +76,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   downloadEntries,
@@ -79,25 +84,46 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
+import { PATROL_ACTION_FROM, resolvePatroller } from '@/data/patrol-rules'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('patrol')
 const columns = ["巡查编号", "所属隐患点", "巡查人", "巡查日期", "坡面情况", "排水情况", "巡查结论", "巡查状态"]
-const actions = ["提交巡查", "上报异常", "确认复核"]
 const statuses = ["待巡查", "已巡查", "发现异常", "已复核"]
-const stats = [{"label": "待巡查任务", "value": 0}, {"label": "发现异常次数", "value": 0}, {"label": "本月巡查次数", "value": 0}]
 
+const router = useRouter()
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+// 面板统计跟列表读同一份数据，不再是写死的数字。
+const stats = computed(() => [
+  { label: '待巡查任务', value: rows.value.filter((row) => String(row.status) === '待巡查').length },
+  { label: '发现异常次数', value: rows.value.filter((row) => String(row.status) === '发现异常').length },
+  {
+    label: '本月巡查次数',
+    value: rows.value.filter((row) =>
+      String(row['巡查日期'] ?? '').startsWith(new Date().toISOString().slice(0, 7)),
+    ).length,
+  },
+])
+
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+// 状态只能顺着「待巡查→已巡查→发现异常→已复核」推进，只给出当前状态能执行的动作。
+function availableActions(row: EntryRow): string[] {
+  return Object.keys(PATROL_ACTION_FROM).filter((action) =>
+    PATROL_ACTION_FROM[action].includes(String(row.status)),
+  )
+}
 
 function resetFilters() {
   filters.value = {}
@@ -112,13 +138,19 @@ function openCreate() {
   errorMessage.value = '巡查记录登记入口尚未接入审批流'
 }
 
+function openDetail(row: EntryRow) {
+  router.push({ name: 'patrol-detail', params: { id: Number(row.id) } })
+}
+
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  noticeMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  noticeMessage.value = result.message
   reload()
 }
 

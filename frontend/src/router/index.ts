@@ -7,6 +7,7 @@ const Crack = () => import('@/views/crack/index.vue')
 const Rain = () => import('@/views/rain/index.vue')
 const Warning = () => import('@/views/warning/index.vue')
 const Patrol = () => import('@/views/patrol/index.vue')
+const PatrolDetail = () => import('@/views/patrol/detail.vue')
 const Relocate = () => import('@/views/relocate/index.vue')
 const Refuge = () => import('@/views/refuge/index.vue')
 const Drill = () => import('@/views/drill/index.vue')
@@ -30,6 +31,7 @@ const router = createRouter({
     { path: '/rain', name: 'rain', component: Rain },
     { path: '/warning', name: 'warning', component: Warning },
     { path: '/patrol', name: 'patrol', component: Patrol },
+    { path: '/patrol/:id', name: 'patrol-detail', component: PatrolDetail },
     { path: '/relocate', name: 'relocate', component: Relocate },
     { path: '/refuge', name: 'refuge', component: Refuge },
     { path: '/drill', name: 'drill', component: Drill },
